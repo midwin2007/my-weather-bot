@@ -7,10 +7,8 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # --- НАСТРОЙКИ ---
-# Токен берется из настроек Render (Environment Variables). 
-# Если там пусто, берется тот, что в кавычках (для локальных тестов).
 BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN", "9245124017:AAHMeBKjYtKxypd5ULfwbNa-uXJLgx1ilcM")
-MY_USER_IDS = [1074643832, 952028708]  # Твой ID и ID жены
+MY_USER_IDS = [1074643832, 952028708]
 CITY_LAT = 55.7558
 CITY_LON = 37.6173
 
@@ -79,16 +77,16 @@ telegram_app.add_handler(CommandHandler("weather", weather_command))
 # --- НАСТРОЙКА FASTAPI С ПРАВИЛЬНОЙ ИНИЦИАЛИЗАЦИЕЙ ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. Инициализируем бота в рамках того же цикла событий, в котором работает FastAPI
+    # 1. Инициализируем бота
     await telegram_app.initialize()
     
-    # 2. Устанавливаем Webhook после инициализации
+    # 2. Устанавливаем Webhook (ВАЖНО: после инициализации)
     webhook_url = f"https://weather-bot-2zyh.onrender.com/{BOT_TOKEN}"
     await telegram_app.bot.set_webhook(webhook_url)
     
     yield
     
-    # 3. Корректно завершаем работу при остановке
+    # 3. Корректно завершаем работу
     await telegram_app.shutdown()
 
 app = FastAPI(lifespan=lifespan)
