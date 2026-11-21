@@ -1,17 +1,18 @@
 import os
-from flask import Flask, request
+from datetime import datetime
+from contextlib import asynccontextmanager
+import httpx
+from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import httpx
-from datetime import datetime
 
-# --- НАСТРОЙКИ (скопируйте сюда ваши значения) ---
+# --- НАСТРОЙКИ ---
 BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN", "9245124017:AAHMeBKjYtKxypd5ULfwbNa-uXJLgx1ilcM")
-MY_USER_IDS = [1074643832, 952028708] # Замените на ваши реальные ID
+MY_USER_IDS = [1074643832, 952028708]  # Ваш ID и ID жены
 CITY_LAT = 55.7558
 CITY_LON = 37.6173
 
-# --- ВАШИ ФУНКЦИИ (погода и Kp) ---
+# --- ФУНКЦИИ (погода и Kp) ---
 async def get_weather_data():
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
@@ -55,39 +56,45 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             storm = "🔴 Сильная буря" if kp >= 7 else ("🟠 Слабая/умеренная буря" if kp >= 5 else "🟢 Спокойно")
         else:
             storm = "данных нет"
-        text = (f"🌡 Температура: {temp}°C\n💧 Влажность: {humidity}%\n💨 Ветер: {wind} м/с\n"
-                f"☔ Осадки: {precip} мм\n📊 Давление: {pressure_mm} мм рт. ст.\n🧲 Kp-индекс: {kp} ({storm})")
+        now = datetime.now().strftime("%d.%m.%Y %H:%M")
+        text = (
+            f"📅 {now}\n"
+            f"🌡 Температура: {temp}°C\n"
+            f"💧 Влажность: {humidity}%\n"
+            f"💨 Ветер: {wind} м/с\n"
+            f"☔ Осадки: {precip} мм\n"
+            f"📊 Давление: {pressure_mm} мм рт. ст.\n"
+            f"🧲 Kp-индекс: {kp} ({storm})"
+        )
         await update.message.reply_text(text)
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}")
 
-# --- FLASK ПРИЛОЖЕНИЕ ---
-app = Flask(__name__)
+# --- НАСТРОЙКА TELEGRAM ---
 telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("weather", weather_command))
 
-# Флаг, чтобы инициализация прошла только один раз при запуске сервера
-bot_initialized = False
+# --- НАСТРОЙКА FASTAPI ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Инициализируем бота при старте сервера
+    await telegram_app.initialize()
+    # Автоматически устанавливаем Webhook
+    webhook_url = f"https://weather-bot-2zyh.onrender.com/{BOT_TOKEN}"
+    await telegram_app.bot.set_webhook(webhook_url)
+    yield
+    # Корректно выключаем при остановке
+    await telegram_app.shutdown()
 
-@app.before_request
-async def ensure_bot_initialized():
-    """Эта функция срабатывает перед каждым входящим запросом и будит бота"""
-    global bot_initialized
-    if not bot_initialized:
-        await telegram_app.initialize()
-        bot_initialized = True
+app = FastAPI(lifespan=lifespan)
 
-@app.route('/health')
-def health():
+@app.get("/health")
+async def health():
     return "OK"
 
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
-async def webhook():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-        await telegram_app.process_update(update)
-        return "ok", 200
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+@app.post(f"/{BOT_TOKEN}")
+async def webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
+    return Response(status_code=200)
