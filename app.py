@@ -95,10 +95,17 @@ app = FastAPI(lifespan=lifespan)
 async def health():
     return "OK"
 
+# --- ВОТ СЮДА ВСТАВЛЯЕМ НОВЫЙ КОД (вместо старого @app.post) ---
+_bot_initialized = False
+
 @app.post(f"/{BOT_TOKEN}")
 async def webhook(request: Request):
+    global _bot_initialized
+    if not _bot_initialized:
+        await telegram_app.initialize()
+        _bot_initialized = True
+    
     data = await request.json()
     update = Update.de_json(data, telegram_app.bot)
-    # Теперь бот инициализирован, и process_update сработает
     await telegram_app.process_update(update)
     return Response(status_code=200)
