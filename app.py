@@ -1,10 +1,10 @@
 import os
 from datetime import datetime
+from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import asyncio
 
 # --- НАСТРОЙКИ ---
 # Токен берется из настроек Render (Environment Variables). 
@@ -76,13 +76,22 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("weather", weather_command))
 
-# --- ЯВНАЯ ИНИЦИАЛИЗАЦИЯ (Чтобы не было ошибки RuntimeError) ---
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-loop.run_until_complete(telegram_app.initialize())
+# --- НАСТРОЙКА FASTAPI С ПРАВИЛЬНОЙ ИНИЦИАЛИЗАЦИЕЙ ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 1. Инициализируем бота в рамках того же цикла событий, в котором работает FastAPI
+    await telegram_app.initialize()
+    
+    # 2. Устанавливаем Webhook после инициализации
+    webhook_url = f"https://weather-bot-2zyh.onrender.com/{BOT_TOKEN}"
+    await telegram_app.bot.set_webhook(webhook_url)
+    
+    yield
+    
+    # 3. Корректно завершаем работу при остановке
+    await telegram_app.shutdown()
 
-# --- НАСТРОЙКА FASTAPI ---
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/health")
 async def health():
@@ -92,5 +101,6 @@ async def health():
 async def webhook(request: Request):
     data = await request.json()
     update = Update.de_json(data, telegram_app.bot)
+    # Теперь бот инициализирован, и process_update сработает
     await telegram_app.process_update(update)
     return Response(status_code=200)
