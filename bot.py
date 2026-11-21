@@ -1,116 +1,93 @@
-import httpx
+import os
+from flask import Flask, request
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import httpx
+from datetime import datetime
 
-# === НАСТРОЙКИ ===
-BOT_TOKEN = "9245124017:AAHMeBKjYtKxypd5ULfwbNa-uXJLgx1ilcM"
-MY_USER_ID = 1074643832  # Замени на свой ID (узнай у @userinfobot)
-CITY_LAT = 55.7558      # Широта (пример: Москва)
-CITY_LON = 37.6173      # Долгота (пример: Москва)
+# --- НАСТРОЙКИ (скопируйте сюда ваши значения) ---
+BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN", "9245124017:AAHMeBKjYtKxypd5ULfwbNa-uXJLgx1ilcM")
+MY_USER_IDS = [1074643832, 952028708] # Замените на ваши реальные ID
+CITY_LAT = 55.7558
+CITY_LON = 37.6173
 
-# Проверка, что пишет именно владелец
-def is_owner(update: Update) -> bool:
-    return update.effective_user.id == MY_USER_ID
-
-
+# --- ВАШИ ФУНКЦИИ (погода и Kp) ---
 async def get_weather_data():
-    """Получает погоду, давление, ветер, осадки и влажность с Open-Meteo."""
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
-        "latitude": CITY_LAT,
-        "longitude": CITY_LON,
-        # Добавили новые параметры в current:
+        "latitude": CITY_LAT, "longitude": CITY_LON,
         "current": "temperature_2m,surface_pressure,weather_code,wind_speed_10m,relative_humidity_2m,precipitation",
-        "wind_speed_unit": "ms",  # Запрашиваем ветер в метрах в секунду (по умолчанию км/ч)
-        "timezone": "auto"
+        "wind_speed_unit": "ms", "timezone": "auto"
     }
     async with httpx.AsyncClient() as client:
         resp = await client.get(url, params=params)
         data = resp.json()
         current = data.get("current", {})
-
         temp = current.get("temperature_2m")
         pressure = current.get("surface_pressure")
-
-        # Давление в гПа -> мм рт. ст.
         pressure_mm = round(pressure * 0.75006, 1) if pressure else "?"
-
-        # Новые данные
         wind = current.get("wind_speed_10m", "?")
         humidity = current.get("relative_humidity_2m", "?")
-        precip = current.get("precipitation", 0.0)  # Осадки в мм
-
+        precip = current.get("precipitation", 0.0)
         return temp, pressure_mm, wind, humidity, precip
 
-
 async def get_kp_index():
-    """Получает текущий Kp-индекс с сервера GFZ (Потсдам)."""
-    # Запрашиваем данные за последние 24 часа, чтобы точно захватить свежий индекс
     url = "https://kp.gfz.de/app/json/?start=2026-01-30T00:00:00Z&end=2026-12-31T23:59:59Z&index=Kp"
-
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get(url, timeout=15.0)
             resp.raise_for_status()
             data = resp.json()
-
-            # GFZ возвращает данные в виде списка, где последний элемент — самый свежий
-            # Формат ответа: {"Kp": [2.0, 1.5, ...], "status": [...]}
             if isinstance(data, dict) and "Kp" in data and data["Kp"]:
-                # Берем последнее значение из списка
-                kp_value = data["Kp"][-1]
-                # Округляем до одного знака после запятой
-                return round(float(kp_value), 1)
-            else:
-                print("GFZ: Не нашли Kp в ответе")
-                return "?"
-
-        except Exception as e:
-            print(f"GFZ: Ошибка получения Kp: {e}")
+                return round(float(data["Kp"][-1]), 1)
+        except Exception:
             return "?"
+    return "?"
+
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_owner(update):
+    if update.effective_user.id not in MY_USER_IDS:
         return
-
     await update.message.reply_text("Смотрю погоду и космос...")
-
     try:
-        # ВОТ ЗДЕСЬ ДОЛЖНЫ БЫТЬ ВСЕ 5 ПЕРЕМЕННЫХ
         temp, pressure_mm, wind, humidity, precip = await get_weather_data()
         kp = await get_kp_index()
-
-        # Оценка магнитной бури по Kp
         if isinstance(kp, (int, float)):
-            if kp >= 7:
-                storm = "🔴 Сильная буря"
-            elif kp >= 5:
-                storm = "🟠 Слабая/умеренная буря"
-            else:
-                storm = "🟢 Спокойно"
+            storm = "🔴 Сильная буря" if kp >= 7 else ("🟠 Слабая/умеренная буря" if kp >= 5 else "🟢 Спокойно")
         else:
             storm = "данных нет"
-
-        # Формируем красивое сообщение с эмодзи
-        text = (
-            f"🌡 Температура: {temp}°C\n"
-            f"💧 Влажность: {humidity}%\n"
-            f"💨 Ветер: {wind} м/с\n"
-            f"☔ Осадки: {precip} мм\n"
-            f"📊 Давление: {pressure_mm} мм рт. ст.\n"
-            f"🧲 Kp-индекс: {kp} ({storm})"
-        )
+        text = (f"🌡 Температура: {temp}°C\n💧 Влажность: {humidity}%\n💨 Ветер: {wind} м/с\n"
+                f"☔ Осадки: {precip} мм\n📊 Давление: {pressure_mm} мм рт. ст.\n🧲 Kp-индекс: {kp} ({storm})")
         await update.message.reply_text(text)
     except Exception as e:
-        # Выводим ошибку в Telegram
         await update.message.reply_text(f"Ошибка: {e}")
-        # И печатаем полную ошибку в консоль PyCharm для отладки
-        print(f"Подробная ошибка: {e}")
 
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("weather", weather_command))
-    print("Бот запущен. Жду /weather...")
-    app.run_polling()
+# --- FLASK ПРИЛОЖЕНИЕ ---
+app = Flask(__name__)
+telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
+telegram_app.add_handler(CommandHandler("weather", weather_command))
+
+# Флаг, чтобы инициализация прошла только один раз при запуске сервера
+bot_initialized = False
+
+@app.before_request
+async def ensure_bot_initialized():
+    """Эта функция срабатывает перед каждым входящим запросом и будит бота"""
+    global bot_initialized
+    if not bot_initialized:
+        await telegram_app.initialize()
+        bot_initialized = True
+
+@app.route('/health')
+def health():
+    return "OK"
+
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+async def webhook():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+        await telegram_app.process_update(update)
+        return "ok", 200
 
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
