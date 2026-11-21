@@ -6,7 +6,7 @@ import httpx
 from datetime import datetime
 
 # --- НАСТРОЙКИ (скопируйте сюда ваши значения) ---
-BOT_TOKEN = os.environ.get("9245124017:AAHMeBKjYtKxypd5ULfwbNa-uXJLgx1ilcM")
+BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN", "9245124017:AAHMeBKjYtKxypd5ULfwbNa-uXJLgx1ilcM")
 MY_USER_IDS = [1074643832, 952028708] # Замените на ваши реальные ID
 CITY_LAT = 55.7558
 CITY_LON = 37.6173
