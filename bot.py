@@ -8,9 +8,10 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # --- НАСТРОЙКИ ---
 BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN", "9245124017:AAHMeBKjYtKxypd5ULfwbNa-uXJLgx1ilcM")
-MY_USER_IDS = [1074643832, 952028708]  # Ваш ID и ID жены
+MY_USER_IDS = [1074643832, 952028708]
 CITY_LAT = 55.7558
 CITY_LON = 37.6173
+
 
 # --- ФУНКЦИИ (погода и Kp) ---
 async def get_weather_data():
@@ -32,6 +33,7 @@ async def get_weather_data():
         precip = current.get("precipitation", 0.0)
         return temp, pressure_mm, wind, humidity, precip
 
+
 async def get_kp_index():
     url = "https://kp.gfz.de/app/json/?start=2026-01-30T00:00:00Z&end=2026-12-31T23:59:59Z&index=Kp"
     async with httpx.AsyncClient() as client:
@@ -44,6 +46,7 @@ async def get_kp_index():
         except Exception:
             return "?"
     return "?"
+
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in MY_USER_IDS:
@@ -70,31 +73,40 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}")
 
+
 # --- НАСТРОЙКА TELEGRAM ---
 telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("weather", weather_command))
 
+
 # --- НАСТРОЙКА FASTAPI ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Инициализируем бота при старте сервера
+    # 1. Обязательная инициализация бота
     await telegram_app.initialize()
-    # Автоматически устанавливаем Webhook
+
+    # 2. Установка Webhook (только после инициализации)
     webhook_url = f"https://weather-bot-2zyh.onrender.com/{BOT_TOKEN}"
     await telegram_app.bot.set_webhook(webhook_url)
+
     yield
-    # Корректно выключаем при остановке
+
+    # 3. Корректное завершение при остановке
     await telegram_app.shutdown()
 
+
 app = FastAPI(lifespan=lifespan)
+
 
 @app.get("/health")
 async def health():
     return "OK"
 
+
 @app.post(f"/{BOT_TOKEN}")
 async def webhook(request: Request):
     data = await request.json()
     update = Update.de_json(data, telegram_app.bot)
+    # Обработка сообщения (теперь бот инициализирован)
     await telegram_app.process_update(update)
     return Response(status_code=200)
