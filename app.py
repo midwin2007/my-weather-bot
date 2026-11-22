@@ -29,30 +29,35 @@ MSK_TZ = ZoneInfo("Europe/Moscow")
 import asyncio  # добавьте, если ещё не импортирован
 
 async def get_weather_data():
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": CITY_LAT, "longitude": CITY_LON,
-        "current": "temperature_2m,surface_pressure,weather_code,wind_speed_10m,relative_humidity_2m,precipitation",
-        "wind_speed_unit": "ms", "timezone": "auto"
-    }
-    for attempt in range(3):  # до 3 попыток
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-            resp = await client.get(url, params=params)
-            if resp.status_code == 429:
-                # Open-Meteo говорит, сколько ждать (Retry-After), но не больше 10 секунд
-                wait = min(int(resp.headers.get("Retry-After", 3)), 10)
-                await asyncio.sleep(wait)
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            current = data.get("current", {})
-            temp = current.get("temperature_2m")
-            pressure = current.get("surface_pressure")
-            pressure_mm = round(pressure * 0.75006, 1) if pressure else "?"
-            wind = current.get("wind_speed_10m", "?")
-            humidity = current.get("relative_humidity_2m", "?")
-            precip = current.get("precipitation", 0.0)
-            return temp, pressure_mm, wind, humidity, precip
+    # wttr.in не требует ключей, просто передаем координаты
+    url = f"https://wttr.in/{CITY_LAT},{CITY_LON}?format=j1"
+    
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        # Данные у wttr.in лежат в другом месте, извлекаем нужное
+        current = data.get("current_condition", [{}])[0]
+        
+        # Температура (в °C)
+        temp = current.get("temp_C")
+        
+        # Давление (в wttr.in оно в гПа, переводим в мм рт. ст.)
+        pressure = current.get("pressure")
+        pressure_mm = round(float(pressure) * 0.75006, 1) if pressure else "?"
+        
+        # Ветер в м/с (в ответе API он в км/ч, делим на 3.6)
+        wind_kmph = current.get("windspeedKmph")
+        wind = round(float(wind_kmph) / 3.6, 1) if wind_kmph else "?"
+        
+        # Влажность
+        humidity = current.get("humidity", "?")
+        
+        # Осадки за последний час (в мм)
+        precip = current.get("precipMM", 0.0)
+        
+        return temp, pressure_mm, wind, humidity, precip
     raise Exception("Погодный сервис временно перегружен. Попробуйте через минуту.")
     
 async def get_kp_index():
