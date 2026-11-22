@@ -82,12 +82,11 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("Смотрю погоду и космос...")
     try:
-        # Делаем оба запроса одновременно через один общий клиент
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
-            weather_res, kp = await asyncio.gather(
-                get_weather_data(client),
-                get_kp_index(client)
-            )
+        # Вызываем функции БЕЗ аргументов, так как они сами создают клиента
+        weather_res, kp = await asyncio.gather(
+            get_weather_data(),
+            get_kp_index()
+        )
         
         temp, pressure_mm, wind, humidity, precip = weather_res
 
@@ -115,7 +114,7 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text)
     except Exception as e:
         await update.message.reply_text(f"Ошибка при получении данных: {e}")
-
+        
 # --- 3. НАСТРОЙКА TELEGRAM ---
 telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("weather", weather_command))
