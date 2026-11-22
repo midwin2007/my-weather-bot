@@ -8,6 +8,7 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import asyncio 
 
 # --- 1. НАСТРОЙКИ И БЕЗОПАСНОСТЬ ---
 BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -25,29 +26,35 @@ CITY_LON = 37.6173
 MSK_TZ = ZoneInfo("Europe/Moscow")
 
 # --- 2. ФУНКЦИИ ПОГОДЫ И Kp-ИНДЕКСА ---
-async def get_weather_data(client: httpx.AsyncClient):
-    # ИСПРАВЛЕНА ССЫЛКА НА API
+import asyncio  # добавьте, если ещё не импортирован
+
+async def get_weather_data():
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
-        "latitude": CITY_LAT,
-        "longitude": CITY_LON,
-        "current": "temperature_2m,surface_pressure,wind_speed_10m,relative_humidity_2m,precipitation",
-        "wind_speed_unit": "ms",
-        "timezone": "Europe/Moscow"
+        "latitude": CITY_LAT, "longitude": CITY_LON,
+        "current": "temperature_2m,surface_pressure,weather_code,wind_speed_10m,relative_humidity_2m,precipitation",
+        "wind_speed_unit": "ms", "timezone": "auto"
     }
-    resp = await client.get(url, params=params)
-    resp.raise_for_status()
-    current = resp.json().get("current", {})
+    for attempt in range(3):  # до 3 попыток
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 429:
+                # Open-Meteo говорит, сколько ждать (Retry-After), но не больше 10 секунд
+                wait = min(int(resp.headers.get("Retry-After", 3)), 10)
+                await asyncio.sleep(wait)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            current = data.get("current", {})
+            temp = current.get("temperature_2m")
+            pressure = current.get("surface_pressure")
+            pressure_mm = round(pressure * 0.75006, 1) if pressure else "?"
+            wind = current.get("wind_speed_10m", "?")
+            humidity = current.get("relative_humidity_2m", "?")
+            precip = current.get("precipitation", 0.0)
+            return temp, pressure_mm, wind, humidity, precip
+    raise Exception("Погодный сервис временно перегружен. Попробуйте через минуту.")
     
-    temp = current.get("temperature_2m", "?")
-    pressure = current.get("surface_pressure")
-    pressure_mm = round(pressure * 0.75006, 1) if pressure is not None else "?"
-    wind = current.get("wind_speed_10m", "?")
-    humidity = current.get("relative_humidity_2m", "?")
-    precip = current.get("precipitation", 0.0)
-    
-    return temp, pressure_mm, wind, humidity, precip
-
 async def get_kp_index(client: httpx.AsyncClient):
     # Запрашиваем данные только за последние 24 часа
     now_utc = datetime.now(timezone.utc)
