@@ -55,25 +55,26 @@ async def get_weather_data():
             return temp, pressure_mm, wind, humidity, precip
     raise Exception("Погодный сервис временно перегружен. Попробуйте через минуту.")
     
-async def get_kp_index(client: httpx.AsyncClient):
-    # Запрашиваем данные только за последние 24 часа
+async def get_kp_index():
+    # Формируем даты динамически, чтобы не зависеть от года
+    from datetime import datetime, timedelta, timezone
     now_utc = datetime.now(timezone.utc)
     start_str = (now_utc - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     end_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     
-    # ИСПРАВЛЕНА ССЫЛКА НА API
     url = f"https://kp.gfz.de/app/json/?start={start_str}&end={end_str}&index=Kp"
-    try:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict) and "Kp" in data:
-            # Отфильтровываем пустые значения (None)
-            valid_kp = [x for x in data["Kp"] if x is not None]
-            if valid_kp:
-                return round(float(valid_kp[-1]), 1)
-    except Exception as e:
-        print(f"⚠️ Ошибка получения Kp-индекса: {e}")
+    
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+        try:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict) and "Kp" in data:
+                valid_kp = [x for x in data["Kp"] if x is not None]
+                if valid_kp:
+                    return round(float(valid_kp[-1]), 1)
+        except Exception as e:
+            print(f"⚠️ Ошибка получения Kp-индекса: {e}")
     return "?"
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
