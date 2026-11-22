@@ -6,13 +6,25 @@ from fastapi import FastAPI, Request, Response
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- НАСТРОЙКИ ---
-BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN", "9245124017:AAHMeBKjYtKxypd5ULfwbNa-uXJLgx1ilcM")
-MY_USER_IDS = [1074643832, 952028708]
+# --- 1. НАСТРОЙКИ И БЕЗОПАСНОСТЬ ---
+BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("ОШИБКА: Переменная TELEGRAM_TOKEN не задана в настройках Render!")
+
+BASE_URL = os.environ.get("BASE_URL")
+if not BASE_URL:
+    # Для локальной разработки
+    BASE_URL = "http://localhost:8000"
+
+# ID берем из переменной окружения (строка "123,456" превращается в список чисел [123, 456])
+# Если переменная не задана, по умолчанию будет пустой список (бот никому не ответит)
+ids_str = os.environ.get("MY_USER_IDS", "")
+MY_USER_IDS = [int(i) for i in ids_str.split(",")] if ids_str else []
+
 CITY_LAT = 55.7558
 CITY_LON = 37.6173
 
-# --- ФУНКЦИИ (погода и Kp) ---
+# --- 2. ФУНКЦИИ ПОГОДЫ И Kp-ИНДЕКСА ---
 async def get_weather_data():
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
@@ -20,7 +32,8 @@ async def get_weather_data():
         "current": "temperature_2m,surface_pressure,weather_code,wind_speed_10m,relative_humidity_2m,precipitation",
         "wind_speed_unit": "ms", "timezone": "auto"
     }
-    async with httpx.AsyncClient() as client:
+    # Используем современный способ задания таймаута
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         resp = await client.get(url, params=params)
         data = resp.json()
         current = data.get("current", {})
@@ -34,9 +47,9 @@ async def get_weather_data():
 
 async def get_kp_index():
     url = "https://kp.gfz.de/app/json/?start=2026-01-30T00:00:00Z&end=2026-12-31T23:59:59Z&index=Kp"
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
         try:
-            resp = await client.get(url, timeout=15.0)
+            resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
             if isinstance(data, dict) and "Kp" in data and data["Kp"]:
@@ -46,17 +59,22 @@ async def get_kp_index():
     return "?"
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Проверка, что пишет именно владелец
     if update.effective_user.id not in MY_USER_IDS:
         return
+        
     await update.message.reply_text("Смотрю погоду и космос...")
     try:
         temp, pressure_mm, wind, humidity, precip = await get_weather_data()
         kp = await get_kp_index()
+        
         if isinstance(kp, (int, float)):
             storm = "🔴 Сильная буря" if kp >= 7 else ("🟠 Слабая/умеренная буря" if kp >= 5 else "🟢 Спокойно")
         else:
             storm = "данных нет"
+            
         now = datetime.now().strftime("%d.%m.%Y %H:%M")
+        
         text = (
             f"📅 {now}\n"
             f"🌡 Температура: {temp}°C\n"
@@ -70,41 +88,41 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}")
 
-# --- НАСТРОЙКА TELEGRAM ---
+# --- 3. НАСТРОЙКА TELEGRAM ---
 telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 telegram_app.add_handler(CommandHandler("weather", weather_command))
 
-# --- НАСТРОЙКА FASTAPI С ПРАВИЛЬНОЙ ИНИЦИАЛИЗАЦИЕЙ ---
+# Формируем путь для вебхука
+webhook_path = f"/{BOT_TOKEN}"
+
+# --- 4. НАСТРОЙКА FASTAPI И ЗАПУСК ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. Инициализируем бота
+    # Инициализируем бота
     await telegram_app.initialize()
-    
-    # 2. Устанавливаем Webhook (ВАЖНО: после инициализации)
-    webhook_url = f"https://weather-bot-2zyh.onrender.com/{BOT_TOKEN}"
-    await telegram_app.bot.set_webhook(webhook_url)
-    
+
+    # Устанавливаем вебхук
+    webhook_url = BASE_URL + webhook_path
+    try:
+        await telegram_app.bot.set_webhook(webhook_url)
+        print(f"✅ Webhook успешно установлен: {webhook_url}")
+    except Exception as e:
+        print(f"⚠️ Ошибка установки вебхука: {e}")
+        # Не прерываем запуск, если вебхук уже был настроен ранее
+
     yield
-    
-    # 3. Корректно завершаем работу
+
+    # Корректно выключаем бота
     await telegram_app.shutdown()
 
 app = FastAPI(lifespan=lifespan)
 
 @app.get("/health")
 async def health():
-    return "OK"
+    return {"status": "ok"}
 
-# --- ВОТ СЮДА ВСТАВЛЯЕМ НОВЫЙ КОД (вместо старого @app.post) ---
-_bot_initialized = False
-
-@app.post(f"/{BOT_TOKEN}")
+@app.post(webhook_path)
 async def webhook(request: Request):
-    global _bot_initialized
-    if not _bot_initialized:
-        await telegram_app.initialize()
-        _bot_initialized = True
-    
     data = await request.json()
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
